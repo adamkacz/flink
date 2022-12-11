@@ -1,12 +1,9 @@
-import websocket
-import _thread
-import time
-import rel
-import json
+from data_getter import DataGetter
 
 
 def main():
-    pass
+    dg = DataGetter()
+    dg.start()
 
 
 if __name__ == "__main__":

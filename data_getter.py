@@ -3,6 +3,7 @@ import _thread
 import time
 import rel
 import json
+from kafka import KafkaProducer
 
 DATA = {
     "type": "subscribe",
@@ -23,8 +24,11 @@ DATA = {
     ]
 }
 
+#PRODUCER = KafkaProducer(bootstrap_servers='localhost:1234')
+
 
 def on_message(ws, message):
+    print(type(message))
     print(message)
 
 
