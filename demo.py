@@ -1,15 +1,13 @@
-import argparse
-import logging
-import sys
+import random
 
-from pyflink.common import WatermarkStrategy, Encoder, Types
+from pyflink.common import WatermarkStrategy, Types
 from pyflink.datastream import StreamExecutionEnvironment, RuntimeExecutionMode
-from pyflink.datastream.connectors.file_system import FileSource, StreamFormat, FileSink, OutputFileConfig, RollingPolicy
+from pyflink.datastream.connectors.file_system import FileSource, StreamFormat, FileSink, RollingPolicy
 
 
-def word_count(input_path):
+def mean_counter(input_path):
     env = StreamExecutionEnvironment.get_execution_environment()
-    env.set_runtime_mode(RuntimeExecutionMode.BATCH)
+    env.set_runtime_mode(RuntimeExecutionMode.STREAMING)
     # write all the data to one file
     env.set_parallelism(1)
 
@@ -23,13 +21,13 @@ def word_count(input_path):
     )
 
     def split(line):
-        yield from line.split()
+        return line.split(",")
 
     # compute word count
-    ds = ds.flat_map(split) \
-        .map(lambda i: (i[0], i[1], 1), output_type=Types.TUPLE([Types.STRING(), Types.FLOAT()])) \
+    ds = ds.map(split, output_type=Types.TUPLE([Types.STRING(), Types.STRING()])) \
+        .map(lambda i: (1, float(i[1]), 1), output_type=Types.TUPLE([Types.INT(), Types.FLOAT(), Types.FLOAT()])) \
         .key_by(lambda i: i[0]) \
-        .reduce(lambda i, j: (i[0], (i[1] + j[1]) / (i[2] + j[2])))
+        .reduce(lambda i, j: (i[0], (i[1] * i[2] + j[1]) / (i[2] + j[2]), i[2] + j[2]))
 
     print("Printing result to stdout. Use --output to specify output path.")
     ds.print()
@@ -39,6 +37,4 @@ def word_count(input_path):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(message)s")
-
-    word_count('ACC_minute_data_with_indicators.csv')
+    mean_counter('ACC_minute_data_with_indicators.csv')
