@@ -29,6 +29,7 @@ class DataGetter:
     topic = 'coinbase'
 
     def __init__(self, purpose='kafka'):
+        self.line_counter = 0
         if purpose == 'kafka':
             on_message = self.on_message_kafka
         elif purpose == 'classic':
@@ -42,10 +43,10 @@ class DataGetter:
 
         websocket.enableTrace(False)
         self.ws = websocket.WebSocketApp("wss://ws-feed.exchange.coinbase.com",
-                                         on_open=self.on_open,
+                                         on_open=DataGetter.on_open,
                                          on_message=on_message,
-                                         on_error=self.on_error,
-                                         on_close=self.on_close)
+                                         on_error=DataGetter.on_error,
+                                         on_close=DataGetter.on_close)
 
     def start(self):
         self.ws.run_forever(dispatcher=rel, reconnect=4)
@@ -53,47 +54,54 @@ class DataGetter:
         rel.signal(2, rel.abort)
         rel.dispatch()
 
-    def on_message(self, ws, message):
+    @staticmethod
+    def on_message(ws, message):
         print(message)
 
     def on_message_kafka(self, ws, message):
-        message_dict = json.loads(message)
-        #print(message_dict)
-        if 'type' not in message_dict or message_dict['type'] != 'l2update':
+        if self.line_counter >= 741023:
+            print('Data end')
             return
 
+        for field_list in DataGetter.prepare_message(message):
+            self.line_counter += 1
+            self.kafka.send(DataGetter.topic, value=",".join(field_list).encode('utf-8'))
+
+    @staticmethod
+    def prepare_message(message):
+        message_dict = json.loads(message)
+        if 'type' not in message_dict or message_dict['type'] != 'l2update':
+            return []
+
+        changes = []
         for change in message_dict["changes"]:
-            # new_dict = {
-            #     "type": message_dict["type"],
-            #     "product_id": message_dict["product_id"],
-            #     "rate_type": change[0],
-            #     "rate_value": float(change[1]),
-            #     "rate_change": float(change[2]),
-            #     "time": message_dict['time'].replace('T', " ").replace('Z', "")
-            # }
-            # # print(json.dumps(new_dict))
-            # self.kafka.send(DataGetter.topic, value=json.dumps(new_dict).encode('utf-8'))
-            field_list = [
+            changes += [[
                 message_dict["type"],
                 message_dict["product_id"],
                 change[0],
                 change[1],
                 change[2],
                 message_dict['time'].replace('T', " ").replace('Z', "")
-            ]
-            self.kafka.send(DataGetter.topic, value=",".join(field_list).encode('utf-8'))
+            ]]
 
-    def on_message_file(self, ws, message):
+        return changes
+
+    @staticmethod
+    def on_message_file(ws, message):
         with open("coinbase.data", "a+") as file:
-            file.write(message + '\n')
+            for field_list in DataGetter.prepare_message(message):
+                file.write(",".join(field_list) + '\n')
 
-    def on_error(self, ws, error):
+    @staticmethod
+    def on_error(ws, error):
         print(error)
 
-    def on_close(self, ws, close_status_code, close_msg):
+    @staticmethod
+    def on_close(ws, close_status_code, close_msg):
         print("### closed ###")
 
-    def on_open(self, ws):
+    @staticmethod
+    def on_open(ws):
         print("Opened connection")
 
 
@@ -103,4 +111,11 @@ def main(purpose='kafka'):
 
 
 if __name__ == '__main__':
-    main()
+    main('file')
+    # 741023
+    # with open("coinbase.data") as file:
+    #     i = 0
+    #     for line in file:
+    #         i += 1
+    #
+    #     print(i)

@@ -1,19 +1,32 @@
-from pyflink.common import Types
+from pyflink.common import Types, WatermarkStrategy
 from pyflink.datastream import StreamExecutionEnvironment, RuntimeExecutionMode
 from pyflink.datastream.connectors.kafka import FlinkKafkaConsumer
 from pyflink.datastream.formats.csv import CsvRowDeserializationSchema
 import data_getter as dg
 from pyflink.common.serialization import Encoder
-from pyflink.datastream.connectors.file_system import FileSink, OutputFileConfig
+from pyflink.datastream.connectors.file_system import FileSink, OutputFileConfig, FileSource, StreamFormat, BulkFormat
+import time
 
 
-class FlinkStreamConsumer:
+class FlinkConsumer:
 
-    def __init__(self, topic=dg.DataGetter.topic, moving_avg_count_limit=10, kind='kafka'):
+    def __init__(self, topic=dg.DataGetter.topic, moving_avg_count_limit=10, kind='kafka', file_name=""):
+        if kind not in ['kafka', 'file', 'batch']:
+            raise ValueError
+
+        if kind != 'kafka' and file_name == "":
+            raise ValueError
+
         self.kind = kind
+        self.file_name = file_name
         self.moving_avg_count_limit = moving_avg_count_limit
         self.env = StreamExecutionEnvironment.get_execution_environment()
-        self.env.set_runtime_mode(RuntimeExecutionMode.STREAMING)
+        if self.kind == 'batch':
+            mode = RuntimeExecutionMode.BATCH
+        else:
+            mode = RuntimeExecutionMode.STREAMING
+
+        self.env.set_runtime_mode(mode)
         # write all the data to one file
         self.env.set_parallelism(1)
         # self.env.add_jars(
@@ -31,14 +44,22 @@ class FlinkStreamConsumer:
                                      Types.STRING()])
             ).build()
 
-        kafka_consumer = FlinkKafkaConsumer(
-            topics=topic,
-            deserialization_schema=deserialization_schema,
-            properties={'bootstrap.servers': '127.0.0.1:9092', 'group.id': 'test'})
+        if self.kind == 'kafka':
+            kafka_consumer = FlinkKafkaConsumer(
+                topics=topic,
+                deserialization_schema=deserialization_schema,
+                properties={'bootstrap.servers': '127.0.0.1:9092', 'group.id': 'test'})
 
-        kafka_consumer.set_start_from_earliest()
-
-        self.ds = self.env.add_source(kafka_consumer)
+            kafka_consumer.set_start_from_earliest()
+            self.ds = self.env.add_source(kafka_consumer)
+        elif self.kind == 'file' or self.kind == 'batch':
+            self.ds = self.env.from_source(
+                source=FileSource.for_record_stream_format(StreamFormat.text_line_format(),
+                                                           self.file_name)
+                .process_static_file_set().build(),
+                watermark_strategy=WatermarkStrategy.for_monotonous_timestamps(),
+                source_name="file_source"
+            )
 
     def execute_counting(self):
         moving_avg_count_limit = self.moving_avg_count_limit
@@ -47,13 +68,24 @@ class FlinkStreamConsumer:
             category = f"{line[1]}-{line[2]}"
             moving_avg_init = tuple([-1 for _ in range(moving_avg_count_limit)])
             # category,       rate,      date, idx,   components,  mov_avg
-            return category, line[3], line[5], 1, moving_avg_init, -1
+            return category, line[3], line[5], 1, moving_avg_init, -1, time.perf_counter()
+
+        def important_info_file(line):
+            str_line = important_info(line.split(','))
+            return str_line[0], float(str_line[1]), str_line[2], int(str_line[3]), str_line[4],\
+                float(str_line[5]), float(str_line[6])
+
+        if self.kind == 'kafka':
+            map_function = important_info
+        else:
+            map_function = important_info_file
 
         tuple_components = [Types.FLOAT() for _ in range(moving_avg_count_limit)]
         self.ds = self.ds \
-            .map(important_info, output_type=Types.TUPLE([Types.STRING(), Types.FLOAT(),
-                                                          Types.STRING(), Types.INT(),
-                                                          Types.TUPLE(tuple_components), Types.FLOAT()])) \
+            .map(map_function, output_type=Types.TUPLE([Types.STRING(), Types.FLOAT(),
+                                                        Types.STRING(), Types.INT(),
+                                                        Types.TUPLE(tuple_components), Types.FLOAT(),
+                                                        Types.FLOAT()])) \
             .key_by(lambda i: i[0]) \
             .reduce(lambda i, j: current_mean(i[0], i[1], j[1], i[3], j[3], j[2], i[4]))
 
@@ -66,7 +98,7 @@ class FlinkStreamConsumer:
         self.ds.sink_to(file_sink)
 
         self.ds.print()
-        self.env.execute('xd')
+        self.env.execute()
 
 
 def current_mean(category, mean, new_obs, indexes_sum, new_ind,
@@ -81,9 +113,12 @@ def current_mean(category, mean, new_obs, indexes_sum, new_ind,
         moving_average = sum(moving_averages_components) / len(moving_averages_components)
 
     # category,       rate,    date,    idx,             components,                    mov_avg
-    return category, new_mean, date, new_delimiter, tuple(moving_averages_components), moving_average
+    return category, new_mean, date, new_delimiter, \
+        tuple(moving_averages_components), moving_average, time.perf_counter()
 
 
 if __name__ == '__main__':
-    consumer = FlinkStreamConsumer()
+    consumer = FlinkConsumer(kind='batch', file_name='coinbase.data')
+    start = time.perf_counter()
     consumer.execute_counting()
+    print(time.perf_counter() - start)

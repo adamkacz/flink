@@ -15,8 +15,8 @@ def read_sink_file(path):
             line = line[:open_] + line[close_:]
             final_lines += [line.split(",")]
 
-    df = pd.DataFrame(final_lines, columns=['category', 'mean', 'time_stamp', 'idx', 'moving_average'])
-    type_list = ['string', 'float', 'string', 'int', 'float']
+    df = pd.DataFrame(final_lines, columns=['category', 'mean', 'time_stamp', 'idx', 'moving_average', 'milliseconds'])
+    type_list = ['string', 'float', 'string', 'int', 'float', 'float']
     for name, col_type in zip(df.columns, type_list):
         df.loc[:, name] = df.loc[:, name].astype(col_type)
 
@@ -27,12 +27,12 @@ def read_sink_file(path):
     return df
 
 
-def plot(path, task_name):
-    log_df = read_sink_file(path)
-    print(log_df)
+def plot(log_df, task_name):
     categories = log_df['category'].unique()
+    time_diff = log_df.max()['milliseconds'] - log_df.min()['milliseconds']
+    print(task_name, time_diff, time_diff / 741023 * 1000)
     for category in categories:
-        path = f"plots/{category}"
+        path = f"plots/{category}/{task_name}"
         if os.path.exists(path):
             shutil.rmtree(path)
 
@@ -44,18 +44,21 @@ def plot(path, task_name):
         plt.savefig(f'{path}/final_plot.jpg')
 
 
-def main():
-    base_path = 'results'
+def main(sub_directory):
+    base_path = f'results/{sub_directory}'
+    data_frames = []
     for directory in os.listdir(base_path):
         sub_path = f'{base_path}/{directory}'
         for path in os.listdir(sub_path):
-            path_split = path.split('-')
-            task_name = path_split[1]
-            plot(f'{sub_path}/{path}', task_name)
+            data_frames += [read_sink_file(f'{sub_path}/{path}')]
+
+    main_data_frame = pd.concat(data_frames)
+    plot(main_data_frame, sub_directory)
 
 
 if __name__ == '__main__':
-    main()
+    for sub_dir in ['file', 'kafka']:
+        main(sub_dir)
 
 
 
